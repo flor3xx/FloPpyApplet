@@ -62,7 +62,7 @@ function statusInfo(agent) {
     return ["lavoro", "In lavoro", "#55c7d9"];
 }
 
-var AgentApplet = class AgentApplet extends Applet.Applet {
+var AgentApplet = class AgentApplet extends Applet.TextIconApplet {
     constructor(metadata, orientation, panelHeight, instanceId) {
         super(orientation, panelHeight, instanceId);
         this._metadata = metadata;
@@ -70,7 +70,9 @@ var AgentApplet = class AgentApplet extends Applet.Applet {
         this._selected = 0;
         this._session = Soup.Session.new();
         this._session.timeout = 2;
-        this.set_applet_icon_path(metadata.path + "/avatar.svg");
+        // Cinnamon 6.6 does not expose set_applet_icon_path; the custom SVG
+        // is used by the dashboard cards while the panel uses a theme icon.
+        this.set_applet_icon_name("applications-system-symbolic");
         this.set_applet_label(" Flo Agent");
         this.set_applet_tooltip("Mostra lo stato delle sessioni opencode");
         this._menu = new Applet.AppletPopupMenu(this, orientation);
