@@ -6,7 +6,7 @@ Il popup mostra repository, attivita', stato, token e notifiche senza modificare
 ## Sicurezza
 
 - Il daemon ascolta solo su `127.0.0.1:47321`.
-- Le API richiedono un token casuale salvato in `~/.local/share/opencode-agent-dashboard/daemon.token` con permessi `0600`.
+- Le API richiedono un token casuale salvato in `${XDG_DATA_HOME:-~/.local/share}/opencode-agent-dashboard/daemon.token` con permessi `0600`.
 - Il body degli eventi e' limitato a 2 MiB.
 - Il plugin usa uno spool locale protetto (`0700` per la directory, `0600` per il file) se il daemon non e' disponibile.
 - Gli eventi possono contenere prompt, percorsi e output degli strumenti: il file dati deve restare privato.
@@ -51,7 +51,7 @@ Se `~/.local/bin` non e' nel `PATH`, aggiungi `export PATH="$HOME/.local/bin:$PA
 - `daemon/`: Python standard library, API locali autenticate su `127.0.0.1:47321`.
 - `plugin/agent-plugin.js`: inoltra eventi senza bloccare opencode e usa uno spool se il daemon e' spento.
 - `applet/`: popup Cinnamon con SVG condiviso e colori per stato.
-- Dati e log: `~/.local/share/opencode-agent-dashboard/`.
+- Dati e log: `${XDG_DATA_HOME:-~/.local/share}/opencode-agent-dashboard/`.
 
 Il pacchetto `notify-send` appartiene a `libnotify-bin`. Se manca, installalo manualmente con `sudo apt install libnotify-bin`.
 

@@ -3,8 +3,9 @@ import { appendFile, mkdir, readFile, chmod } from "node:fs/promises"
 import { dirname } from "node:path"
 
 const ENDPOINT = "http://127.0.0.1:47321/event"
-const SPOOL = `${process.env.HOME || "."}/.local/share/opencode-agent-dashboard/events.jsonl`
-const TOKEN_FILE = `${process.env.HOME || "."}/.local/share/opencode-agent-dashboard/daemon.token`
+const DATA_HOME = process.env.XDG_DATA_HOME || `${process.env.HOME || "."}/.local/share`
+const SPOOL = `${DATA_HOME}/opencode-agent-dashboard/events.jsonl`
+const TOKEN_FILE = `${DATA_HOME}/opencode-agent-dashboard/daemon.token`
 const TIMEOUT_MS = 350
 
 const safe = (value) => {

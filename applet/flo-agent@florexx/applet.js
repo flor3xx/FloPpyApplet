@@ -8,7 +8,8 @@ const ByteArray = imports.byteArray;
 const Mainloop = imports.mainloop;
 
 const STATE_URL = "http://127.0.0.1:47321/state";
-const TOKEN_PATH = GLib.get_home_dir() + "/.local/share/opencode-agent-dashboard/daemon.token";
+const DATA_HOME = GLib.getenv("XDG_DATA_HOME") || (GLib.get_home_dir() + "/.local/share");
+const TOKEN_PATH = DATA_HOME + "/opencode-agent-dashboard/daemon.token";
 const POLL_MS = 3000;
 
 function value(object, keys, fallback) {

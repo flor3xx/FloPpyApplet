@@ -3,6 +3,7 @@
 import argparse
 import hmac
 import json
+import os
 import queue
 import socket
 import threading
@@ -28,7 +29,8 @@ class _Handler(BaseHTTPRequestHandler):
     max_body = 2 * 1024 * 1024
 
     def _authorized(self):
-        token_file = Path.home() / ".local/share/opencode-agent-dashboard/daemon.token"
+        data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share"))
+        token_file = data_home / "opencode-agent-dashboard/daemon.token"
         try:
             expected = token_file.read_text(encoding="utf-8").strip()
             supplied = self.headers.get("X-Flo-Agent-Token", "")
@@ -104,7 +106,8 @@ def serve_forever(host="127.0.0.1", port=8765, state=None):
     if host not in ("127.0.0.1", "localhost", "::1"):
         raise ValueError("daemon accepts loopback addresses only")
     store = state or StateStore()
-    spool = Path.home() / ".local/share/opencode-agent-dashboard/events.jsonl"
+    data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share"))
+    spool = data_home / "opencode-agent-dashboard/events.jsonl"
     if spool.is_file():
         try:
             for line in spool.read_text(encoding="utf-8").splitlines():
