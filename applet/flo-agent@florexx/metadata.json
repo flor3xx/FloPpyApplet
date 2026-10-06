@@ -1,0 +1,7 @@
+{
+    "uuid": "flo-agent@florexx",
+    "name": "Flo Agent",
+    "description": "Dashboard locale delle sessioni opencode",
+    "icon": "avatar.svg",
+    "max-instances": 1
+}
