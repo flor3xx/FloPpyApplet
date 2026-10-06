@@ -8,7 +8,7 @@ import time
 from collections import defaultdict
 
 
-STATUS_ORDER = {"normal": 0, "confirm": 1, "error": 2}
+STATUS_ORDER = {"working": 0, "normal": 0, "confirm": 1, "error": 2}
 
 
 def _first(event, *names, default=None):
@@ -26,7 +26,7 @@ class StateStore:
         self.pid_checker = pid_checker or self._pid_exists
         self.notifier = notifier or self._notify
         self._sessions = {}
-        self._seen_messages = defaultdict(set)
+        self._message_tokens = defaultdict(dict)
         self._notified = set()
         self._subscribers = []
         self._lock = threading.RLock()
@@ -73,8 +73,23 @@ class StateStore:
                     raw[key] = event[key]
             raw.setdefault("kind", event.get("kind"))
             event = raw
-        session_id = _first(event, "sessionID", "sessionId", "session_id",
-                            "session", "id")
+        # Gli eventi di opencode 1.18.x espongono i dati utili in properties.
+        properties = event.get("properties")
+        if isinstance(properties, dict):
+            event = {**properties, **event}
+        session_info = properties.get("info") if isinstance(properties, dict) else None
+        session_id = _first(event, "sessionID", "sessionId", "session_id", "session")
+        if session_id is None and isinstance(session_info, dict):
+            session_id = _first(session_info, "sessionID", "sessionId", "session_id", "id")
+        if session_id is None and isinstance(properties, dict):
+            for nested_name in ("part", "message", "permission"):
+                nested = properties.get(nested_name)
+                if isinstance(nested, dict):
+                    session_id = _first(nested, "sessionID", "sessionId", "session_id")
+                    if session_id is not None:
+                        break
+        if session_id is None and isinstance(event.get("input"), dict):
+            session_id = _first(event["input"], "sessionID", "sessionId", "session_id")
         if session_id is None:
             raise ValueError("event has no session id")
         session_id = str(session_id)
@@ -85,6 +100,7 @@ class StateStore:
                 session = {
                     "sessionID": session_id, "pid": None, "instanceNumber": 1,
                     "parentID": None, "master": True, "children": [],
+                    "directory": None,
                     "status": "normal", "activity": None, "todo": [],
                     "tokens": {"input": 0, "output": 0, "reasoning": 0,
                                 "cacheRead": 0, "cacheWrite": 0, "total": 0},
@@ -105,11 +121,18 @@ class StateStore:
                     session["instanceNumber"] = 1 + len(siblings)
 
             parent = _first(event, "parentID", "parentId", "parent_id")
+            if parent is None and isinstance(session_info, dict):
+                parent = _first(session_info, "parentID", "parentId", "parent_id")
             if parent is not None:
                 session["parentID"] = str(parent)
                 session["master"] = False
             session["master"] = bool(_first(event, "master", default=session["master"]))
+            directory = _first(event, "directory", "cwd", "worktree", "projectDirectory")
+            if directory is not None:
+                session["directory"] = str(directory)
             status = _first(event, "status", default=None)
+            if isinstance(status, dict):
+                status = _first(status, "type", "status")
             if status is None:
                 kind = str(_first(event, "kind", "type", default=""))
                 if "permission" in kind or "question" in kind:
@@ -118,11 +141,32 @@ class StateStore:
                     status = "error"
                 elif "idle" in kind or "completed" in kind:
                     status = "normal"
+            if status in ("busy", "working", "running"):
+                status = "working"
+            elif status in ("idle", "done", "completed", "complete", "finished"):
+                status = "normal"
+            elif status in ("retry", "error", "failed"):
+                status = "error"
+            kind = str(_first(event, "kind", "type", default=""))
+            if any(marker in kind for marker in ("permission.replied", "question.replied", "question.rejected")):
+                status = "normal"
+            output = event.get("output")
+            if isinstance(output, dict) and (output.get("error") or output.get("status") == "error"):
+                status = "error"
             if status in STATUS_ORDER:
                 session["status"] = status
             activity = _first(event, "activity", "message", "task")
-            if activity is None and _first(event, "tool", default=None) is not None:
-                activity = "Esegue: " + str(event["tool"])
+            input_data = event.get("input") if isinstance(event.get("input"), dict) else {}
+            args = input_data.get("args") if isinstance(input_data.get("args"), dict) else {}
+            if args.get("description") is not None:
+                activity = str(args["description"])
+            if activity is None and isinstance(output, dict):
+                activity = _first(output, "title", "message")
+            tool = _first(event, "tool", default=None)
+            if tool is None and isinstance(event.get("input"), dict):
+                tool = _first(event["input"], "tool", default=None)
+            if activity is None and tool is not None:
+                activity = "Esegue: " + str(tool)
             if activity is not None:
                 session["activity"] = str(activity)
             todo = _first(event, "todo", "todos")
@@ -130,22 +174,42 @@ class StateStore:
                 session["todo"] = list(todo) if isinstance(todo, (list, tuple)) else [todo]
 
             message_id = _first(event, "messageID", "messageId", "message_id")
-            token_data = _first(event, "tokens", "tokenUsage", "usage", default=event)
+            token_data = _first(event, "tokens", "tokenUsage", "usage", default=None)
+            if token_data is None:
+                for nested_name in ("info", "message", "part", "output"):
+                    nested = event.get(nested_name)
+                    if isinstance(nested, dict):
+                        token_data = _first(nested, "tokens", "tokenUsage", "usage", default=None)
+                        if token_data is not None:
+                            break
             if message_id is None:
                 message_id = _first(event, "id", default=None)
-            if message_id is None or message_id not in self._seen_messages[session_id]:
-                if message_id is not None:
-                    self._seen_messages[session_id].add(str(message_id))
-                self._add_tokens(session["tokens"], token_data)
+            if message_id is not None and token_data is not None:
+                message_id = str(message_id)
+                current = self._token_counts(token_data)
+                previous = self._message_tokens[session_id].get(message_id)
+                if previous is not None:
+                    self._add_token_counts(session["tokens"], previous, -1)
+                self._message_tokens[session_id][message_id] = current
+                self._add_token_counts(session["tokens"], current, 1)
+            elif message_id is None and token_data is not None:
+                self._add_token_counts(session["tokens"], self._token_counts(token_data), 1)
 
             old_status = session.get("_last_status")
             session["_last_status"] = session["status"]
             session["lastEvent"] = self.clock()
             if not first_event and old_status != session["status"]:
                 key = (session_id, old_status, session["status"])
-                if key not in self._notified:
+                title = None
+                if session["status"] == "normal" and old_status == "working":
+                    title = "Agent completato"
+                elif session["status"] == "error":
+                    title = "Agent error"
+                elif session["status"] == "confirm":
+                    title = "Agent richiede conferma"
+                if title is not None and key not in self._notified:
                     self._notified.add(key)
-                    self.notifier("Agent " + session["status"],
+                    self.notifier(title,
                                   session.get("activity") or session_id)
             self._rebuild_links()
             snapshot = self.snapshot()
@@ -153,24 +217,34 @@ class StateStore:
             return snapshot
 
     @staticmethod
-    def _add_tokens(target, data):
+    def _token_counts(data):
         if not isinstance(data, dict):
-            return
-        input_count = _first(data, "input", "inputTokens", "prompt_tokens", default=0)
-        output_count = _first(data, "output", "outputTokens", "completion_tokens", default=0)
-        reasoning_count = _first(data, "reasoning", "reasoningTokens", default=0)
-        cache_read = _first(data, "cacheRead", "cache_read", "cacheReadTokens", default=0)
-        cache_write = _first(data, "cacheWrite", "cache_write", "cacheWriteTokens", default=0)
+            return None
+        cache = data.get("cache") if isinstance(data.get("cache"), dict) else {}
+        values = {
+            "input": _first(data, "input", "inputTokens", "prompt_tokens", default=0),
+            "output": _first(data, "output", "outputTokens", "completion_tokens", default=0),
+            "reasoning": _first(data, "reasoning", "reasoningTokens", default=0),
+            "cacheRead": _first(data, "cacheRead", "cache_read", "cacheReadTokens", default=cache.get("read", 0)),
+            "cacheWrite": _first(data, "cacheWrite", "cache_write", "cacheWriteTokens", default=cache.get("write", 0)),
+        }
         total = _first(data, "total", "totalTokens", "total_tokens", default=None)
         try:
-            target["input"] += int(input_count or 0)
-            target["output"] += int(output_count or 0)
-            target["reasoning"] = target.get("reasoning", 0) + int(reasoning_count or 0)
-            target["cacheRead"] = target.get("cacheRead", 0) + int(cache_read or 0)
-            target["cacheWrite"] = target.get("cacheWrite", 0) + int(cache_write or 0)
-            target["total"] += int(total if total is not None else (input_count or 0) + (output_count or 0))
+            values = {key: int(value or 0) for key, value in values.items()}
+            values["total"] = int(total if total is not None else values["input"] + values["output"])
+            return values
         except (TypeError, ValueError):
-            return
+            return None
+
+    @staticmethod
+    def _add_token_counts(target, values, sign):
+        if values:
+            for key, value in values.items():
+                target[key] += sign * value
+
+    @classmethod
+    def _add_tokens(cls, target, data):
+        cls._add_token_counts(target, cls._token_counts(data), 1)
 
     def _rebuild_links(self):
         for session in self._sessions.values():
@@ -178,7 +252,12 @@ class StateStore:
         for session in self._sessions.values():
             parent = self._sessions.get(session["parentID"])
             if parent is not None:
+                session["master"] = False
                 parent["children"].append(session["sessionID"])
+            elif session["parentID"] is not None and (str(session["parentID"]).startswith("msg_") or session["parentID"] == "message"):
+                # Alcuni eventi usano come parent l'ID del messaggio, non della sessione.
+                session["parentID"] = None
+                session["master"] = True
 
     def cleanup_stale(self):
         with self._lock:
@@ -186,7 +265,7 @@ class StateStore:
                        if session["pid"] is not None and not self.pid_checker(session["pid"])]
             for sid in removed:
                 del self._sessions[sid]
-                self._seen_messages.pop(sid, None)
+                self._message_tokens.pop(sid, None)
             self._rebuild_links()
             return removed
 

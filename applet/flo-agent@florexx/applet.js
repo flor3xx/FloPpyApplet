@@ -8,6 +8,7 @@ const ByteArray = imports.byteArray;
 const Mainloop = imports.mainloop;
 
 const STATE_URL = "http://127.0.0.1:47321/state";
+const TOKEN_PATH = GLib.get_home_dir() + "/.local/share/opencode-agent-dashboard/daemon.token";
 const POLL_MS = 3000;
 
 function value(object, keys, fallback) {
@@ -62,6 +63,28 @@ function statusInfo(agent) {
     return ["lavoro", "In lavoro", "#55c7d9"];
 }
 
+function sessionName(session) {
+    let directory = String(value(session, ["directory", "project", "cwd", "name"], "Sessione opencode"));
+    let parts = directory.split("/");
+    return parts[parts.length - 1] || directory;
+}
+
+function daemonToken() {
+    try {
+        let file = Gio.file_new_for_path(TOKEN_PATH);
+        let loaded = file.load_contents(null);
+        return ByteArray.toString(loaded[1]).trim();
+    } catch (error) {
+        return "";
+    }
+}
+
+function avatarPath(metadata, status) {
+    let filename = status === "lavoro" ? "avatar-working.svg" :
+        (status === "conferma" || status === "problema" ? "avatar-confirm.svg" : "avatar.svg");
+    return metadata.path + "/" + filename;
+}
+
 var AgentApplet = class AgentApplet extends Applet.TextIconApplet {
     constructor(metadata, orientation, panelHeight, instanceId) {
         super(orientation, panelHeight, instanceId);
@@ -70,9 +93,7 @@ var AgentApplet = class AgentApplet extends Applet.TextIconApplet {
         this._selected = 0;
         this._session = Soup.Session.new();
         this._session.timeout = 2;
-        // Cinnamon 6.6 does not expose set_applet_icon_path; the custom SVG
-        // is used by the dashboard cards while the panel uses a theme icon.
-        this.set_applet_icon_name("applications-system-symbolic");
+        this.set_applet_icon_path(this._metadata.path + "/avatar.svg");
         this.set_applet_label(" Flo Agent");
         this.set_applet_tooltip("Mostra lo stato delle sessioni opencode");
         this._menu = new Applet.AppletPopupMenu(this, orientation);
@@ -91,18 +112,23 @@ var AgentApplet = class AgentApplet extends Applet.TextIconApplet {
 
     _poll() {
         let message = Soup.Message.new("GET", STATE_URL);
-        this._session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (session, result) => {
-            try {
-                let response = session.send_and_read_finish(result);
-                let body = ByteArray.toString(response.get_data());
-                this._state = JSON.parse(body || "{}");
-                this._render();
-            } catch (error) {
-                this._state = { sessions: [] };
-                this._render();
+        message.request_headers.append("X-Flo-Agent-Token", daemonToken());
+        try {
+            let body;
+            if (typeof this._session.send_and_read === "function") {
+                // Soup 3: la chiamata sincrona evita callback non disponibili in alcune build GJS.
+                body = ByteArray.toString(this._session.send_and_read(message, null).get_data());
+            } else {
+                // Soup 2, presente in alcune versioni Cinnamon.
+                let response = this._session.send_message(message);
+                body = response && response.response_body ? ByteArray.toString(response.response_body.data) : "";
             }
-            this._pollId = Mainloop.timeout_add(POLL_MS, () => { this._poll(); return false; });
-        });
+            this._state = JSON.parse(body || "{}");
+        } catch (error) {
+            this._state = { sessions: [], error: "Daemon non raggiungibile" };
+        }
+        this._render();
+        this._pollId = Mainloop.timeout_add(POLL_MS, () => { this._poll(); return false; });
     }
 
     _sessions() {
@@ -114,9 +140,23 @@ var AgentApplet = class AgentApplet extends Applet.TextIconApplet {
     _agents(session) {
         let agents = value(session, ["agents", "children"], []);
         if (!Array.isArray(agents)) agents = [];
+        let sessions = this._sessions();
+        agents = agents.map((agent) => {
+            if (typeof agent !== "string") return agent;
+            return sessions.find((item) => String(item.sessionID) === agent) || { sessionID: agent };
+        });
         let master = value(session, ["master", "agent"], null);
-        if (master) return [master].concat(agents);
-        return agents;
+        if (master) return [master === true ? session : master].concat(agents);
+        return agents.length ? agents : [session];
+    }
+
+    _worstAgent(session) {
+        let agents = this._agents(session);
+        let order = { lavoro: 0, completato: 0, conferma: 1, problema: 2 };
+        return agents.reduce((worst, agent) => {
+            let candidate = statusInfo(agent);
+            return order[candidate[0]] > order[worst[0]] ? candidate : worst;
+        }, statusInfo(agents[0] || session));
     }
 
     _label(text, style) {
@@ -138,11 +178,13 @@ var AgentApplet = class AgentApplet extends Applet.TextIconApplet {
         body.add_child(content);
         body.add_child(sessionBar);
         this._root.add_child(body);
+        content.add_child(this._label("Sessioni rilevate: " + sessions.length, "flo-session-count"));
         if (!sessions.length) {
-            content.add_child(this._label("Nessuna sessione di opencode aperta", "flo-empty"));
+            content.add_child(this._label(value(this._state, ["error"], "Nessuna sessione di opencode aperta"), "flo-empty"));
             return;
         }
         let session = sessions[this._selected];
+        content.add_child(this._label("Selezionata: " + sessionName(session), "flo-selected-session"));
         let totals = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 };
         this._agents(session).forEach((agent) => addTokens(totals, tokenTotals(agent)));
         let tokenBar = new St.BoxLayout({ style_class: "flo-token-bar" });
@@ -157,9 +199,9 @@ var AgentApplet = class AgentApplet extends Applet.TextIconApplet {
         if (!agents.length) content.add_child(this._label("Nessun agente attivo", "flo-empty"));
         agents.forEach((agent, index) => content.add_child(this._agentCard(agent, index === 0)));
         sessions.forEach((item, index) => {
-            let info = statusInfo((this._agents(item)[0]) || item);
-            let button = new St.Button({ label: String(index + 1), style_class: "flo-session-button " + info[0], reactive: true, can_focus: true });
-            button.set_tooltip_text(String(value(item, ["project", "cwd", "directory", "name"], "Sessione opencode")));
+            let info = this._worstAgent(item);
+            let selected = index === this._selected ? " selezionata" : "";
+            let button = new St.Button({ label: String(index + 1), style_class: "flo-session-button " + info[0] + selected, reactive: true, can_focus: true });
             button.connect("clicked", () => { this._selected = index; this._render(); });
             sessionBar.add_child(button);
         });
@@ -168,7 +210,7 @@ var AgentApplet = class AgentApplet extends Applet.TextIconApplet {
     _agentCard(agent, master) {
         let info = statusInfo(agent);
         let card = new St.BoxLayout({ style_class: "flo-agent-card " + (master ? "flo-master " : "flo-child ") + info[0] });
-        let icon = new St.Icon({ gicon: Gio.icon_new_for_string(this._metadata.path + "/avatar.svg"), icon_size: master ? 72 : 42, style_class: "flo-avatar " + info[0] });
+        let icon = new St.Icon({ gicon: Gio.icon_new_for_string(avatarPath(this._metadata, info[0])), icon_size: master ? 72 : 42, style_class: "flo-avatar " + info[0] });
         let details = new St.BoxLayout({ vertical: true, style_class: "flo-agent-details" });
         let name = value(agent, ["name", "type", "title"], master ? "Agente master" : "Sotto agente");
         let task = value(agent, ["activity", "task", "description", "doing", "message"], "In attesa di un tuo messaggio");
@@ -177,7 +219,6 @@ var AgentApplet = class AgentApplet extends Applet.TextIconApplet {
         details.add_child(this._label(info[1], "flo-agent-status"));
         card.add_child(icon);
         card.add_child(details);
-        card.set_tooltip_text(String(task));
         return card;
     }
 

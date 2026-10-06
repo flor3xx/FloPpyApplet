@@ -1,9 +1,10 @@
 // Plugin legacy per opencode 1.18.x. L'osservabilità non deve mai influenzare la TUI.
-import { appendFile, mkdir } from "node:fs/promises"
+import { appendFile, mkdir, readFile, chmod } from "node:fs/promises"
 import { dirname } from "node:path"
 
 const ENDPOINT = "http://127.0.0.1:47321/event"
 const SPOOL = `${process.env.HOME || "."}/.local/share/opencode-agent-dashboard/events.jsonl`
+const TOKEN_FILE = `${process.env.HOME || "."}/.local/share/opencode-agent-dashboard/daemon.token`
 const TIMEOUT_MS = 350
 
 const safe = (value) => {
@@ -30,6 +31,8 @@ const spool = (payload) => {
   Promise.resolve().then(async () => {
     try {
       await mkdir(dirname(SPOOL), { recursive: true })
+      await chmod(dirname(SPOOL), 0o700)
+      try { await chmod(SPOOL, 0o600) } catch (_) {}
       await appendFile(SPOOL, `${JSON.stringify(payload)}\n`, { encoding: "utf8", mode: 0o600 })
     } catch (_) {
       // Il monitoraggio è opzionale: nessun errore deve arrivare a opencode.
@@ -45,7 +48,10 @@ const send = (payload) => {
       timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
       const response = await fetch(ENDPOINT, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          "x-flo-agent-token": (await readFile(TOKEN_FILE, "utf8")).trim(),
+        },
         body: JSON.stringify(payload),
         signal: controller.signal,
       })

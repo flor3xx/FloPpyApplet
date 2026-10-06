@@ -6,11 +6,15 @@ DATA="${XDG_DATA_HOME:-$HOME/.local/share}/opencode-agent-dashboard"
 PIDFILE="$DATA/daemon.pid"
 LOCKFILE="$DATA/daemon.lock"
 LOGFILE="$DATA/daemon.log"
+TOKENFILE="$DATA/daemon.token"
 PLUGIN_SOURCE="$ROOT/plugin/agent-plugin.js"
 PLUGIN_TARGET="$HOME/.config/opencode/plugins/agent-plugin.js"
 PORT="${AGENT_PORT:-47321}"
 
 mkdir -p "$DATA" "$HOME/.config/opencode/plugins" 2>/dev/null || true
+if [ ! -s "$TOKENFILE" ]; then
+  (umask 077; python3 -c 'import secrets; print(secrets.token_urlsafe(32))' >"$TOKENFILE") 2>/dev/null || true
+fi
 
 running() {
   [ -r "$PIDFILE" ] || return 1
@@ -28,10 +32,6 @@ daemon_command() {
 }
 
 open_applet() {
-  if [ -n "${AGENT_APPLET_COMMAND:-}" ]; then
-    sh -c "$AGENT_APPLET_COMMAND" >/dev/null 2>&1 &
-    return 0
-  fi
   # L'applet installato può registrare questa interfaccia D-Bus per aprire il popup.
   if command -v gdbus >/dev/null 2>&1; then
     gdbus call --session --dest org.Cinnamon --object-path /org/Cinnamon \
@@ -59,7 +59,9 @@ start() {
     printf '%s\n' "Daemon non ancora presente: impossibile avviare la dashboard." >&2
     return 1
   fi
-  nohup python3 "$server" --host 127.0.0.1 --port "$PORT" >>"$LOGFILE" 2>&1 &
+  # Avvia come modulo: server.py usa import relativi quando viene eseguito dal package.
+  PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" nohup python3 -m daemon.server \
+    --host 127.0.0.1 --port "$PORT" >>"$LOGFILE" 2>&1 &
   printf '%s\n' "$!" >"$PIDFILE"
   sleep 0.15
   open_applet || printf '%s\n' "Daemon avviato; applet non disponibile o non installato." >&2

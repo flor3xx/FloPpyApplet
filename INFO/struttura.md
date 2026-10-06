@@ -1,4 +1,4 @@
-Stato: in corso
+Stato: completato
 Aggiornato: 2026-10-06
 
 # Struttura

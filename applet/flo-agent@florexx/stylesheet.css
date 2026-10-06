@@ -10,6 +10,7 @@
 .flo-session-bar { width: 48px; spacing: 7px; padding-top: 2px; }
 .flo-session-button { width: 34px; height: 34px; border-radius: 8px; background-color: #263244; color: #dbeafe; font-weight: bold; }
 .flo-session-button:hover { background-color: #374861; }
+.flo-session-button.selezionata { background-color: #38516f; border: 3px solid #f8fafc; color: #ffffff; }
 .flo-session-button.lavoro { border: 2px solid #55c7d9; }
 .flo-session-button.completato { border: 2px solid #55c7d9; }
 .flo-session-button.conferma { border: 2px solid #8b5cf6; }
@@ -31,3 +32,4 @@
 .flo-agent-task { color: #cbd5e1; font-size: 12px; }
 .flo-agent-status { color: #8da4bd; font-size: 11px; }
 .flo-empty { padding: 48px 20px; color: #a9b8ca; font-size: 15px; text-align: center; }
+.flo-session-count, .flo-selected-session { color: #93c5fd; font-size: 12px; font-weight: bold; }

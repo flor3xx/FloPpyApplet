@@ -1,7 +1,15 @@
 # FloPpy Applet
 
-Applet Cinnamon locale per vedere nel pannello le sessioni di opencode, il master e i sotto-agenti.
-Il popup e' in italiano e mostra token, attivita', stato e notifiche. Funziona con i modelli OmniRoute senza modificare i provider.
+Applet Cinnamon locale per monitorare le sessioni opencode, gli agenti master e i sotto-agenti.
+Il popup mostra repository, attivita', stato, token e notifiche senza modificare i provider OmniRoute.
+
+## Sicurezza
+
+- Il daemon ascolta solo su `127.0.0.1:47321`.
+- Le API richiedono un token casuale salvato in `~/.local/share/opencode-agent-dashboard/daemon.token` con permessi `0600`.
+- Il body degli eventi e' limitato a 2 MiB.
+- Il plugin usa uno spool locale protetto (`0700` per la directory, `0600` per il file) se il daemon non e' disponibile.
+- Gli eventi possono contenere prompt, percorsi e output degli strumenti: il file dati deve restare privato.
 
 ## Installazione
 
@@ -9,11 +17,12 @@ Dalla directory del progetto:
 
 ```bash
 mkdir -p ~/.local/share/cinnamon/applets
-cp -r applet/flo-agent@florexx ~/.local/share/cinnamon/applets/
+cp -a applet/flo-agent@florexx ~/.local/share/cinnamon/applets/
 ./bin/agent install-plugin
+./bin/agent start
 ```
 
-Poi apri **Impostazioni di Cinnamon > Applet**, aggiungi **Flo Agent** al pannello e riavvia Cinnamon con `Alt+F2`, quindi `r`.
+Poi apri **Impostazioni di Cinnamon > Applet** e aggiungi **Flo Agent** al pannello. Dopo gli aggiornamenti, rimuovi e aggiungi nuovamente l'applet per ricaricare il codice.
 Il plugin viene caricato solo dalle nuove istanze di opencode: riavvia quelle gia' aperte.
 
 ## Uso
@@ -26,6 +35,8 @@ Il plugin viene caricato solo dalle nuove istanze di opencode: riavvia quelle gi
 ./bin/agent uninstall-plugin
 ```
 
+`./bin/agent status` controlla il daemon. `./bin/agent logs` mostra il log di avvio.
+
 Per usare il comando globale `agent`:
 
 ```bash
@@ -37,7 +48,7 @@ Se `~/.local/bin` non e' nel `PATH`, aggiungi `export PATH="$HOME/.local/bin:$PA
 
 ## Architettura
 
-- `daemon/`: Python standard library, server solo su `127.0.0.1:47321`.
+- `daemon/`: Python standard library, API locali autenticate su `127.0.0.1:47321`.
 - `plugin/agent-plugin.js`: inoltra eventi senza bloccare opencode e usa uno spool se il daemon e' spento.
 - `applet/`: popup Cinnamon con SVG condiviso e colori per stato.
 - Dati e log: `~/.local/share/opencode-agent-dashboard/`.
@@ -49,6 +60,7 @@ Il pacchetto `notify-send` appartiene a `libnotify-bin`. Se manca, installalo ma
 ```bash
 python3 -m unittest
 python3 -m py_compile daemon/*.py
+git diff --check
 ```
 
 Il test runtime dell'applet richiede Cinnamon/GJS nella sessione grafica.
